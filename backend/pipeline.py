@@ -204,7 +204,13 @@ async def run_video_pipeline(job_id: str, req: VideoForgeRequest):
             f"high quality commercial photography, no text"
         )
         image_path = OUTPUT_IMAGES / f"{job_id}.jpg"
-        await generate_image(image_prompt, image_path)
+        if meta.format == "9:16":
+            img_w, img_h = 720, 1280
+        elif meta.format == "1:1":
+            img_w, img_h = 1080, 1080
+        else:  # 16:9 default
+            img_w, img_h = 1280, 720
+        await generate_image(image_prompt, image_path, width=img_w, height=img_h)
 
         # 4. Ensamblado FFmpeg
         video_path = OUTPUT_VIDEOS / f"{job_id}.mp4"
