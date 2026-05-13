@@ -20,6 +20,7 @@ from backend.config import (
     TTS_VOICE_AMANDA, TTS_VOICE_HENRY, TTS_VOICE_EN_US,
     POLLINATIONS_URL, POLLINATIONS_WIDTH, POLLINATIONS_HEIGHT,
     SEEDANCE_API_KEY, SEEDANCE_API_BASE, SEEDANCE_MODEL_DEFAULT,
+    FAL_AI_KEY, FAL_IMAGE_MODEL,
 )
 from backend.schemas import VideoForgeRequest, AudioForgeRequest, LandingForgeRequest, AdCreativeRequest
 from backend.database import get_db, ForgeJob, ForgeAsset
@@ -95,9 +96,39 @@ async def generate_tts(text: str, voice: str, output_path: Path) -> Path:
 
 
 # ════════════════════════════════════════════════════════════════
-# STEP 3 — Imagen con Pollinations.ai
+# STEP 3 — Imagen con fal.ai (Flux) o Pollinations.ai (fallback)
 # ════════════════════════════════════════════════════════════════
 async def generate_image(prompt: str, output_path: Path, width: int = POLLINATIONS_WIDTH, height: int = POLLINATIONS_HEIGHT) -> Path:
+    if FAL_AI_KEY:
+        return await _generate_image_fal(prompt, output_path, width, height)
+    return await _generate_image_pollinations(prompt, output_path, width, height)
+
+
+async def _generate_image_fal(prompt: str, output_path: Path, width: int, height: int) -> Path:
+    """Genera imagen con fal.ai Flux schnell — alta calidad, rápido."""
+    import urllib.request
+    payload = {"prompt": prompt, "image_size": {"width": width, "height": height}, "num_images": 1}
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(
+                f"https://fal.run/{FAL_IMAGE_MODEL}",
+                json=payload,
+                headers={"Authorization": f"Key {FAL_AI_KEY}", "Content-Type": "application/json"},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            img_url = data["images"][0]["url"]
+            img_resp = await client.get(img_url)
+            img_resp.raise_for_status()
+            output_path.write_bytes(img_resp.content)
+        logger.info(f"Imagen fal.ai (Flux): {output_path}")
+        return output_path
+    except Exception as e:
+        logger.warning(f"fal.ai error, usando Pollinations fallback: {e}")
+        return await _generate_image_pollinations(prompt, output_path, width, height)
+
+
+async def _generate_image_pollinations(prompt: str, output_path: Path, width: int, height: int) -> Path:
     import urllib.parse
     encoded = urllib.parse.quote(prompt)
     url = f"https://image.pollinations.ai/prompt/{encoded}?width={width}&height={height}&nologo=true"
@@ -106,7 +137,7 @@ async def generate_image(prompt: str, output_path: Path, width: int = POLLINATIO
             resp = await client.get(url)
             resp.raise_for_status()
             output_path.write_bytes(resp.content)
-        logger.info(f"Imagen generada: {output_path}")
+        logger.info(f"Imagen Pollinations: {output_path}")
         return output_path
     except Exception as e:
         logger.error(f"Pollinations error: {e}")
