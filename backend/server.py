@@ -19,7 +19,7 @@ from backend.schemas import (
     AdCreativeRequest, MasterForgeRequest,
     ForgeJobResponse, ForgeStatusResponse,
 )
-from backend.pipeline import run_video_pipeline, run_audio_pipeline
+from backend.pipeline import run_video_pipeline, run_audio_pipeline, deliver_to_social_engine
 
 logging.basicConfig(
     level=logging.INFO,
@@ -221,3 +221,83 @@ async def list_jobs(_: str = Depends(verify_api_key)):
 async def pipeline_callback(payload: dict):
     logger.info(f"Callback recibido: {payload}")
     return {"status": "ok"}
+
+
+# ════════════════════════════════════════════════════════════════
+# REVISIÓN HUMANA — Aprobar / Rechazar antes de publicar
+# Flujo: pending_review → (approve) → publishing → published
+#                       → (reject)  → rejected
+# NUNCA se publica sin aprobación explícita del Comandante.
+# ════════════════════════════════════════════════════════════════
+
+@app.post("/api/jobs/{job_id}/approve")
+async def approve_job(
+    job_id: str,
+    background_tasks: BackgroundTasks,
+    notes: Optional[str] = None,
+    _: str = Depends(verify_api_key),
+):
+    """Aprueba un job en pending_review y lo entrega a Social Engine."""
+    with get_db() as db:
+        job = db.get(ForgeJob, job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Job no encontrado")
+        if job.status != "pending_review":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Job no está en pending_review (estado actual: {job.status})"
+            )
+        job.status = "publishing"
+        result_urls = json.loads(job.result_urls) if job.result_urls else {}
+        brief = json.loads(job.brief_data) if job.brief_data else {}
+
+    async def _publish():
+        from pathlib import Path
+        video_path = Path(result_urls.get("video", ""))
+        thumb_path = Path(result_urls.get("thumbnail", ""))
+        result = await deliver_to_social_engine(job_id, video_path, thumb_path, brief)
+        final_status = "published" if result.get("status") != "error" else "publish_failed"
+        with get_db() as db2:
+            job2 = db2.get(ForgeJob, job_id)
+            if job2:
+                job2.status = final_status
+                if notes:
+                    job2.error = f"[APROBADO] {notes}"
+        logger.info(f"[{job_id}] Entregado a Social Engine → {final_status}")
+
+    background_tasks.add_task(_publish)
+    logger.info(f"[{job_id}] APROBADO por el Comandante. Publicando en Social Engine…")
+    return {
+        "job_id": job_id,
+        "status": "publishing",
+        "message": "Aprobado. Entregando a Social Engine para publicación.",
+        "notes": notes,
+    }
+
+
+@app.post("/api/jobs/{job_id}/reject")
+async def reject_job(
+    job_id: str,
+    reason: Optional[str] = None,
+    _: str = Depends(verify_api_key),
+):
+    """Rechaza un job. Queda como rejected — nunca se publica."""
+    with get_db() as db:
+        job = db.get(ForgeJob, job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Job no encontrado")
+        if job.status not in ("pending_review", "publishing"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Job no puede rechazarse desde estado: {job.status}"
+            )
+        job.status = "rejected"
+        job.error = f"[RECHAZADO] {reason or 'Sin motivo especificado'}"
+
+    logger.info(f"[{job_id}] RECHAZADO: {reason}")
+    return {
+        "job_id": job_id,
+        "status": "rejected",
+        "reason": reason or "Sin motivo especificado",
+        "message": "Job rechazado. No se publicará.",
+    }

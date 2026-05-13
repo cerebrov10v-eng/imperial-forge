@@ -214,12 +214,12 @@ async def run_video_pipeline(job_id: str, req: VideoForgeRequest):
         thumb_path = OUTPUT_IMAGES / f"{job_id}_thumb.jpg"
         await generate_thumbnail(image_prompt + ", thumbnail, 16:9", thumb_path)
 
-        # 6. Guardar assets en DB
+        # 6. Guardar assets en DB — estado pending_review (requiere aprobación humana)
         duration_s = time.monotonic() - start
         with get_db() as db:
             job = db.get(ForgeJob, job_id)
             if job:
-                job.status = "done"
+                job.status = "pending_review"
                 job.completed_at = datetime.utcnow()
                 job.duration_s = duration_s
                 job.result_urls = json.dumps({
@@ -232,11 +232,9 @@ async def run_video_pipeline(job_id: str, req: VideoForgeRequest):
             for atype, apath in [("video", video_path), ("audio", audio_path), ("thumbnail", thumb_path)]:
                 db.add(ForgeAsset(job_id=job_id, asset_type=atype, local_path=str(apath)))
 
-        # 7. Entregar a Social Engine (si callback configurado)
-        if req.callback_url or SOCIAL_ENGINE_URL:
-            await deliver_to_social_engine(job_id, video_path, thumb_path, brief)
-
-        logger.info(f"[{job_id}] Video pipeline completado en {duration_s:.1f}s")
+        # NO auto-publicar. El job queda en pending_review hasta aprobación manual.
+        # Usar POST /api/jobs/{job_id}/approve para publicar.
+        logger.info(f"[{job_id}] Video generado en {duration_s:.1f}s — PENDIENTE DE REVISIÓN")
 
     except Exception as e:
         logger.error(f"[{job_id}] Pipeline error: {e}", exc_info=True)
