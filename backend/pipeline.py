@@ -15,7 +15,7 @@ from typing import Optional
 import httpx
 
 from backend.config import (
-    KIMI_PROXY_URL, SOCIAL_ENGINE_URL, FORGE_API_KEY,
+    KIMI_PROXY_URL, SOCIAL_ENGINE_URL, FORGE_API_KEY, CEREBRO_API_URL,
     OUTPUT_VIDEOS, OUTPUT_AUDIO, OUTPUT_IMAGES,
     TTS_VOICE_AMANDA, TTS_VOICE_HENRY, TTS_VOICE_EN_US,
     POLLINATIONS_URL, POLLINATIONS_WIDTH, POLLINATIONS_HEIGHT,
@@ -189,7 +189,7 @@ async def deliver_to_social_engine(job_id: str, video_path: Path, thumbnail_path
             {"type": "thumbnail", "local_path": str(thumbnail_path)},
         ],
         "brief_data": brief,
-        "callback_url": f"http://localhost:8300/api/pipeline/callback",
+        "callback_url": f"{CEREBRO_API_URL}/api/pipeline/callback",
     }
     try:
         async with httpx.AsyncClient(timeout=30) as client:
